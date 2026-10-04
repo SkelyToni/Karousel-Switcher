@@ -1,0 +1,11 @@
+{
+  "KPackageStructure": "KWin/WindowSwitcher",
+  "KPlugin": {
+    "Id": "scrolltab",
+    "Name": "ScrollTab",
+    "Description": "Current-desktop windows in horizontal order, with KDE's thumbnail grid visuals",
+    "Icon": "preferences-system-windows-switcher",
+    "License": "GPL-2.0-or-later",
+    "Version": "0.1.0"
+  }
+}
