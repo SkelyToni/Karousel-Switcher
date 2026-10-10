@@ -26,7 +26,6 @@ class GeometryChangeEffect {
             createdTime: Date.now(),
             animationInstances: 0,
             maximizedStateAboutToChange: false,
-            motion: null,
         };
         window.windowFrameGeometryChanged.connect(
             this.onWindowFrameGeometryChanged.bind(this),
@@ -47,7 +46,6 @@ class GeometryChangeEffect {
             window.geometryChangeData.animationInstances - 1);
         if (window.geometryChangeData.animationInstances === 0) {
             window.setData(Effect.WindowForceBlurRole, null);
-            window.geometryChangeData.motion = null;
         }
     }
 
@@ -91,37 +89,18 @@ class GeometryChangeEffect {
         const widthRatio = oldGeometry.width / newGeometry.width;
         const heightRatio = oldGeometry.height / newGeometry.height;
 
-        // Continue from the currently painted transform. Otherwise repeated
-        // Karousel focus changes stack animations and produce visible jerks.
-        const previous = window.geometryChangeData.motion;
-        var offsetX = 0, offsetY = 0, scaleX = 1, scaleY = 1;
-        if (previous) {
-            const progress = Math.max(0, Math.min(1,
-                (Date.now() - previous.started) / Math.max(1, previous.duration)));
-            // Match OutCubic exactly: gentler initial speed than OutExpo,
-            // with zero velocity as the window settles.
-            const remaining = Math.pow(1 - progress, 3);
-            offsetX = previous.x * remaining;
-            offsetY = previous.y * remaining;
-            scaleX = 1 + (previous.scaleX - 1) * remaining;
-            scaleY = 1 + (previous.scaleY - 1) * remaining;
-            cancel(previous.ids);
-            // Cancellation does not emit animationEnded in KWin.
-            window.geometryChangeData.animationInstances = 0;
-        }
-        const motion = {
-            x: offsetX - xDelta - widthDelta / 2,
-            y: offsetY - yDelta - heightDelta / 2,
-            scaleX: scaleX * widthRatio,
-            scaleY: scaleY * heightRatio,
-            started: Date.now(), duration: this.duration,
-        };
+        // Layer each step on the motion still in progress: KWin adds
+        // translations and multiplies scales, so the painted geometry stays
+        // continuous. A step from rest starts promptly with OutCubic. A step
+        // that arrives mid-motion eases in from zero velocity, so the window's
+        // speed never jumps when Karousel retargets it during key repeat.
+        const moving = window.geometryChangeData.animationInstances > 0;
         const animations = [
             {
                 type: Effect.Translation,
                 from: {
-                    value1: motion.x,
-                    value2: motion.y,
+                    value1: -xDelta - widthDelta / 2,
+                    value2: -yDelta - heightDelta / 2,
                 },
                 to: {
                     value1: 0,
@@ -129,13 +108,12 @@ class GeometryChangeEffect {
                 },
             },
         ];
-        const resizing = Math.abs(motion.scaleX - 1) > 0.00001 ||
-            Math.abs(motion.scaleY - 1) > 0.00001;
+        const resizing = widthDelta !== 0 || heightDelta !== 0;
         if (resizing) animations.push({
                 type: Effect.Scale,
                 from: {
-                    value1: motion.scaleX,
-                    value2: motion.scaleY,
+                    value1: widthRatio,
+                    value2: heightRatio,
                 },
                 to: {
                     value1: 1,
@@ -146,15 +124,14 @@ class GeometryChangeEffect {
         window.geometryChangeData.animationInstances += animations.length;
         // Ordinary Karousel scrolling needs only translation. Avoid a scale
         // pass and forced background blur for every moving window.
-        window.setData(Effect.WindowForceBlurRole, resizing ? true : null);
+        if (resizing) window.setData(Effect.WindowForceBlurRole, true);
 
-        motion.ids = animate({
+        animate({
             window: window,
             duration: this.duration,
-            curve: QEasingCurve.OutCubic,
+            curve: moving ? QEasingCurve.InOutCubic : QEasingCurve.OutCubic,
             animations: animations,
         });
-        window.geometryChangeData.motion = motion;
     }
 
     onWindowMaximizedStateAboutToChange(window, horizontal, vertical) {

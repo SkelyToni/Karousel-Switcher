@@ -59,11 +59,16 @@ def main():
         controller.write_text(controller.read_text().replace("        initialized = true;",
             '        initialized = true; console.log("SCROLLTAB-OPEN", rows.map(function(r){return r.caption;}).join(","), selectedRow);'))
         popup = controller.parent / "main.qml"
-        popup.write_text(popup.read_text().replace("            location: PlasmaCore.Types.Floating",
-            '''            onFrameSwapped: console.log("SCROLLTAB-RENDERED", visible, spatial.selectedRow,
-                KWin.Workspace.activeWindow ? KWin.Workspace.activeWindow.caption : "")
+        popup.write_text(popup.read_text().replace("        location: PlasmaCore.Types.Floating",
+            '''            property Connections renderProbe: Connections {
+                target: popup
+                function onFrameSwapped() {
+                    console.log("SCROLLTAB-RENDERED", popup.visible, spatial.selectedRow,
+                        KWin.Workspace.activeWindow ? KWin.Workspace.activeWindow.caption : "");
+                }
+            }
             property Timer popupProbe: Timer {
-                interval: 70; running: true; repeat: true
+                interval: 70; running: tabBox.visible; repeat: true
                 onTriggered: {
                     console.log("SCROLLTAB-HELD", parent.visible, spatial.selectedRow,
                         KWin.Workspace.activeWindow ? KWin.Workspace.activeWindow.caption : "");
@@ -87,6 +92,8 @@ def main():
                         function ready(child) {
                             if (child.objectName === "scrolltabThumbnailLoader" && child.status === Loader.Ready)
                                 selectedReady = true;
+                            if (child.objectName === "scrolltabThumbnailSnapshot" && child.status === Image.Ready)
+                                selectedReady = true;
                             Array.from(child.children || []).forEach(ready);
                         }
                         ready(item);
@@ -95,7 +102,7 @@ def main():
                         spatial.rows.length, selectedReady);
                 }
             }
-            location: PlasmaCore.Types.Floating'''))
+        location: PlasmaCore.Types.Floating'''))
         with args.log.open("w") as log:
             def dbus(*arguments):
                 return subprocess.run([qdbus, *arguments], env=env, capture_output=True,
@@ -170,12 +177,16 @@ property Timer motionProbe: Timer {
                 dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadDeclarativeScript", str(fixture), "scrolltab-fixture")
                 dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start")
                 time.sleep(0.1)
-                cases = [(1, 0, False, "Lower"), (-1, 0, False, "Left"), (1, 350, False, "Lower"),
-                         (2, 150, False, "Sticky"), (3, 150, False, "Right"),
-                         (4, 150, False, extras[0] if extras else "Right"),
-                         (-2, 150, False, "Left"), (2, 150, True, "Middle"),
-                         (20, 150, False, extras[-1] if extras else "Right"),
-                         (-20, 150, False, "Left")]
+                # Spatial order of the current-desktop windows; Middle starts
+                # active, and stepping wraps around both ends.
+                order = ["Left", "Middle", "Lower", "Sticky", "Right"] + extras
+                def target(steps):
+                    return order[(order.index("Middle") + steps) % len(order)]
+                cases = [(1, 0, False), (-1, 0, False), (1, 350, False), (2, 150, False),
+                         (3, 150, False), (4, 150, False), (-2, 150, False), (2, 150, True),
+                         (20, 150, False), (-20, 150, False)]
+                cases = [(steps, hold, cancel, "Middle" if cancel else target(steps))
+                         for steps, hold, cancel in cases]
                 for number, (steps, hold, cancel, expected) in enumerate(cases):
                     script('workspace.activeWindow = workspace.windowList().find(function(w){return w.caption === "ScrollTab Middle";});')
                     time.sleep(0.05)
@@ -206,6 +217,8 @@ property Timer motionProbe: Timer {
         raise RuntimeError(f"ScrollTab did not open; inspect {args.log}")
     if "SCROLLTAB-RENDERED true" not in output:
         raise RuntimeError(f"ScrollTab popup did not render; inspect {args.log}")
+    if "SCROLLTAB-HELD false" in output:
+        raise RuntimeError(f"Popup was hidden while Alt was held (re-created during switching); inspect {args.log}")
     if "SCROLLTAB-HELD true 2 ScrollTab Lower" not in output:
         raise RuntimeError(f"Popup or live focus missing while Alt is held; inspect {args.log}")
     if "SCROLLTAB-ROW true true true ScrollTab Right" not in output:
@@ -221,7 +234,7 @@ property Timer motionProbe: Timer {
               any(token in line for token in ["TypeError", "ReferenceError", "is not a type", "Cannot assign", "Unable to assign"])]
     if errors:
         raise RuntimeError("QML errors: " + "\n".join(errors[:12]))
-    print("Virtual stock KWin smoke passed: quick taps, held Alt, forward/reverse, non-wrapping edges, current desktop, all-desktops windows, and Escape. Log: " + str(args.log))
+    print("Virtual stock KWin smoke passed: quick taps, held Alt, forward/reverse, wrap-around, current desktop, all-desktops windows, and Escape. Log: " + str(args.log))
 
 
 if __name__ == "__main__":

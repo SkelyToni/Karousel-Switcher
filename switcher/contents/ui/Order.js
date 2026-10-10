@@ -17,7 +17,7 @@ function snapshot(model, windows) {
         var window = byId[id];
         var frame = window ? window.frameGeometry : { x: row, y: 0 };
         result.push({
-            nativeIndex: row, id: id, windowId: windowId,
+            nativeIndex: row, id: id, windowId: windowId, window: window || null,
             caption: model.data(index, captionRole),
             icon: window ? window.icon : model.data(index, 260),
             closeable: window ? window.closeable : false,
@@ -27,6 +27,14 @@ function snapshot(model, windows) {
     return result.sort(function(a, b) {
         return a.x - b.x || a.y - b.y ||
             (a.id < b.id ? -1 : a.id > b.id ? 1 : a.nativeIndex - b.nativeIndex);
+    });
+}
+
+// True when a rebuilt snapshot shows the same entries in the same order.
+function sameEntries(a, b) {
+    return a.length === b.length && a.every(function(row, i) {
+        return row.id === b[i].id && row.caption === b[i].caption &&
+            row.closeable === b[i].closeable;
     });
 }
 

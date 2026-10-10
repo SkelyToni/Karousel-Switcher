@@ -33,6 +33,8 @@ TestCase {
     QtObject {
         id: liveWorkspace
         property var activeWindow: null
+        property var history: []
+        onActiveWindowChanged: history.push(activeWindow ? activeWindow.internalId : null)
     }
     function init() {
         native.visible = false;
@@ -49,8 +51,21 @@ TestCase {
         tryCompare(liveWorkspace, "activeWindow", controller.windows[3]);
         native.currentIndex = 4;
         tryCompare(liveWorkspace, "activeWindow", controller.windows[4]);
+        native.visible = false; // Escape: KWin activates nothing
+        tryCompare(liveWorkspace, "activeWindow", controller.windows[0]);
+    }
+    function test_accept_does_not_revisit_original() {
+        liveWorkspace.activeWindow = controller.windows[0];
+        controller.workspace = liveWorkspace;
+        native.currentIndex = 1;
+        native.visible = true;
+        tryCompare(liveWorkspace, "activeWindow", controller.windows[3]);
+        liveWorkspace.history = [];
         native.visible = false;
-        compare(liveWorkspace.activeWindow.internalId, "middle");
+        liveWorkspace.activeWindow = controller.windows[3]; // KWin's accept
+        wait(20);
+        compare(liveWorkspace.activeWindow.internalId, "lower");
+        verify(liveWorkspace.history.indexOf("middle") < 0, liveWorkspace.history.join(","));
     }
     function test_focus_burst_skips_intermediate_windows() {
         liveWorkspace.activeWindow = controller.windows[0];
@@ -64,7 +79,28 @@ TestCase {
         wait(40);
         compare(liveWorkspace.activeWindow.internalId, "middle");
     }
-    function test_forward_stops_at_right_edge() {
+    function test_settles_after_focus_motion() {
+        liveWorkspace.activeWindow = controller.windows[0];
+        controller.workspace = liveWorkspace;
+        native.currentIndex = 1;
+        native.visible = true;
+        verify(!controller.settled);
+        tryCompare(liveWorkspace, "activeWindow", controller.windows[3]);
+        verify(!controller.settled);
+        tryCompare(controller, "settled", true, 1000);
+        native.currentIndex = 4;
+        tryCompare(liveWorkspace, "activeWindow", controller.windows[4]);
+        verify(!controller.settled);
+        native.visible = false;
+    }
+    function test_snapshot_cache_drops_closed_windows() {
+        controller.snapshots = {"middle": {url: "a"}, "gone": {url: "b"}};
+        native.visible = true;
+        verify(controller.snapshots["middle"] !== undefined);
+        verify(controller.snapshots["gone"] === undefined);
+        native.visible = false;
+    }
+    function test_forward_wraps_at_right_edge() {
         native.currentIndex = 1; // KWin's initial MRU step
         native.visible = true;
         compare(controller.rows.map(function(r){return r.id;}).join(","), "left,middle,lower,sticky,farRight");
@@ -74,30 +110,34 @@ TestCase {
         compare(controller.rows[controller.selectedRow].id, "sticky");
         native.currentIndex = 0;
         compare(controller.rows[controller.selectedRow].id, "farRight");
-        native.currentIndex = 2;
-        compare(controller.rows[controller.selectedRow].id, "farRight");
         compare(native.currentIndex, 1);
-        native.currentIndex = 2;
-        compare(native.currentIndex, 1);
-        native.currentIndex = 0; // reverse away from the edge
-        compare(controller.rows[controller.selectedRow].id, "sticky");
+        native.currentIndex = 2; // forward past the right edge
+        compare(controller.rows[controller.selectedRow].id, "left");
+        compare(native.currentIndex, 2);
+        native.currentIndex = 3;
+        compare(controller.rows[controller.selectedRow].id, "middle");
+        compare(native.currentIndex, 0);
     }
-    function test_reverse_stops_at_left_edge() {
+    function test_reverse_wraps_at_left_edge() {
         native.currentIndex = model.rowCount() - 1;
         native.visible = true;
         compare(controller.rows[controller.selectedRow].id, "left");
         compare(native.currentIndex, 2);
-        native.currentIndex = 1;
-        compare(controller.rows[controller.selectedRow].id, "left");
-        compare(native.currentIndex, 2);
-        native.currentIndex = 3; // forward away from the edge
-        compare(controller.rows[controller.selectedRow].id, "middle");
+        native.currentIndex = 1; // reverse past the left edge
+        compare(controller.rows[controller.selectedRow].id, "farRight");
+        compare(native.currentIndex, 1);
+        native.currentIndex = 0;
+        compare(controller.rows[controller.selectedRow].id, "sticky");
     }
-    function test_arrow_selection_clamps() {
+    function test_arrow_selection() {
         native.visible = true;
         controller.select(-10);
         compare(controller.rows[controller.selectedRow].id, "left");
         controller.select(100);
+        compare(controller.rows[controller.selectedRow].id, "farRight");
+        controller.move(1);
+        compare(controller.rows[controller.selectedRow].id, "left");
+        controller.move(-1);
         compare(controller.rows[controller.selectedRow].id, "farRight");
     }
     function test_two_windows_data() {
@@ -137,6 +177,33 @@ TestCase {
         model.modelReset();
         compare(controller.rows[controller.selectedRow].id, "lower");
         compare(native.currentIndex, 2);
+    }
+    function test_unchanged_reset_keeps_rows() {
+        native.currentIndex = 1;
+        native.visible = true;
+        var before = controller.rows;
+        model.ids = ["lower", "middle", "farRight", "left", "sticky"];
+        model.modelReset();
+        verify(controller.rows === before);
+        compare(controller.rows[controller.selectedRow].id, "lower");
+        compare(native.currentIndex, 0);
+        native.currentIndex = 1; // forward from native 0 to native 1
+        compare(controller.rows[controller.selectedRow].id, "sticky");
+    }
+    function test_reopening_reuses_rows() {
+        native.currentIndex = 1;
+        native.visible = true;
+        var before = controller.rows;
+        native.visible = false;
+        model.ids = ["left", "lower", "middle", "farRight", "sticky"];
+        native.currentIndex = 1;
+        native.visible = true;
+        verify(controller.rows === before);
+        // Native rows were renumbered in place: active "left" is native 0,
+        // so one forward step selects "middle", now native 2.
+        compare(controller.rows[controller.selectedRow].id, "middle");
+        compare(native.currentIndex, 2);
+        native.visible = false;
     }
     function test_order_frozen_during_geometry_changes() {
         native.currentIndex = 1;

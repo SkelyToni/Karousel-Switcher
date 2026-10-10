@@ -33,15 +33,19 @@ This is an ordinary temporary development environment, not a system rebuild.
 
 ## Controls and behavior
 
-- **Alt+Tab** moves right; **Alt+Shift+Tab** moves left. Navigation stops at
-  the first and last window, without wrapping around.
+- **Alt+Tab** moves right; **Alt+Shift+Tab** moves left. Navigation wraps
+  around: past the last window it continues at the first, and back.
   With exactly two windows, either shortcut toggles between them: KWin's
   selection index cannot distinguish forward from reverse in this case.
 - Each step focuses the selected window and lets Karousel scroll to it.
   Release **Alt** to keep that window; **Escape** restores the starting window.
+  Accepting never passes back through the starting window: on close, focus is
+  cleared for one event-loop pass, and the starting window is restored only
+  if KWin activated nothing (Escape).
 - Thumbnails stay in one horizontal row. The row scrolls to keep the selected
   window visible when there are more windows than fit on screen.
-- Arrow keys navigate the thumbnail row; Home/End select its first/last entry.
+- Arrow keys navigate the thumbnail row (also wrapping); Home/End select its
+  first/last entry.
 - Click a thumbnail to activate; use its close button to close that window.
 - Windows are sorted by frame x, then y, then a stable window ID for exact
   overlaps. Off-screen windows and negative positions are supported.
@@ -66,19 +70,35 @@ behavior, just like clicking a window.
 
 ## Smooth scrolling with Geometry Change
 
-The highlight glides between thumbnails in 110 ms. Focus previews are batched
-in 16 ms intervals, so very fast repeats skip intermediate desktop rearrangements
-while keeping every keyboard selection and the final choice intact.
+The popup is kept cheap so Karousel's window motion stays smooth: KWin draws
+the popup on the same main thread that drives window animations. The selection
+frame and strip move instantly, so the popup redraws once per step instead of
+every frame. The background is solid, so KWin need not re-blur the windows
+moving behind it. The popup is a frameless overlay rather than a Qt tool window: tool
+windows were hidden on focus changes, re-creating the popup during switching. Thumbnails are still snapshots, kept across openings: a
+live thumbnail would be re-rendered at full window size every time Karousel
+moves its window. A window seen for the first time loads live once and is
+captured. While windows move, nothing else is live; once motion settles
+(300 ms after the last focus change), the selected window goes live to show its
+focused colors and current contents, and is re-captured when you move on.
+When KWin resets its model without changing the visible list, the existing
+thumbnails stay in place. Focus previews run on the next event-loop pass, so selections
+made together collapse into one desktop rearrangement without delaying each
+step's motion; every keyboard selection and the final choice stay intact.
 
 For the installed **Geometry Change 1.5** extension, this project also includes
-an adaptation that replaces overlapping motion animations with one continuous
-translation/scale animation from the current visual position. It keeps the
-configured duration and uses gentler OutCubic easing. Pure scrolling uses only
+an adaptation that keeps window speed continuous during repeated steps. A
+step from rest uses gentle OutCubic easing instead of OutExpo's abrupt start.
+A step that arrives while the window is still moving is layered on the running
+motion and eases in from zero velocity, so key repeat never kicks the window
+forward. The configured duration is kept. Pure scrolling uses only
 translation, without an unnecessary scale animation or forced blur. The popup
-is created after its model is ready, avoiding an empty first layout.
-Live thumbnails are loaded asynchronously near the visible strip, including
-one neighboring cell on each side. Distant cached entries retain their icons
-and captions without keeping full window snapshot sources alive.
+is shown only after its model is ready, avoiding an empty first layout. It
+and its per-window entries are created once and reused by later openings
+while the window list is unchanged; nothing is live while it is hidden.
+All thumbnails load asynchronously when the popup opens and are captured
+once; entries stay alive while the popup is open, so scrolling never reloads a
+live thumbnail.
 The Geometry Change adaptation affects all windows animated by that effect,
 including normal Karousel focus switching.
 
@@ -136,7 +156,7 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software qmltestrunner -input tests/q
 
 `tools/smoke.py` starts an isolated virtual stock KWin session with temporary
 config and data directories. It tests actual quick and held Alt+Tab input,
-reverse traversal, non-wrapping edges, current-desktop filtering, sticky windows, and
+reverse traversal, wrap-around, current-desktop filtering, sticky windows, and
 Escape cancellation. Its `tools/send_keys.c` driver only permits the named
 test socket. Build that driver against Wayland's client library and a generated
 client header/code for Plasma's `fake-input.xml`; then run:
